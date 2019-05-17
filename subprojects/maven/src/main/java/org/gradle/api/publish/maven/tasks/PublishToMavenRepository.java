@@ -22,7 +22,6 @@ import org.gradle.api.internal.artifacts.repositories.transport.RepositoryTransp
 import org.gradle.api.publish.internal.PublishOperation;
 import org.gradle.api.publish.maven.internal.publication.MavenPublicationInternal;
 import org.gradle.api.publish.maven.internal.publisher.DuplicatePublicationTracker;
-import org.gradle.api.publish.maven.internal.publisher.DuplicateTrackingMavenPublisher;
 import org.gradle.api.publish.maven.internal.publisher.MavenPublisher;
 import org.gradle.api.publish.maven.internal.publisher.MavenRemotePublisher;
 import org.gradle.api.publish.maven.internal.publisher.ValidatingMavenPublisher;
@@ -37,8 +36,6 @@ import javax.inject.Inject;
  * @since 1.4
  */
 public class PublishToMavenRepository extends AbstractPublishToMaven {
-
-    public DuplicatePublicationTracker duplicatePublicationTracker;
     private MavenArtifactRepository repository;
 
     /**
@@ -79,9 +76,9 @@ public class PublishToMavenRepository extends AbstractPublishToMaven {
         new PublishOperation(publication, repository.getName()) {
             @Override
             protected void publish() throws Exception {
+                getDuplicatePublicationTracker().checkCanPublish(publication, repository);
                 MavenPublisher remotePublisher = new MavenRemotePublisher(getTemporaryDirFactory(), getRepositoryTransportFactory());
                 remotePublisher = new ValidatingMavenPublisher(remotePublisher);
-                remotePublisher = new DuplicateTrackingMavenPublisher(remotePublisher, duplicatePublicationTracker);
                 remotePublisher.publish(publication.asNormalisedPublication(), repository);
             }
         }.run();
@@ -89,6 +86,11 @@ public class PublishToMavenRepository extends AbstractPublishToMaven {
 
     @Inject
     protected RepositoryTransportFactory getRepositoryTransportFactory() {
+        throw new UnsupportedOperationException();
+    }
+
+    @Inject
+    protected DuplicatePublicationTracker getDuplicatePublicationTracker() {
         throw new UnsupportedOperationException();
     }
 }
