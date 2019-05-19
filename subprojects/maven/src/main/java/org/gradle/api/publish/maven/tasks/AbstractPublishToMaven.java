@@ -23,7 +23,7 @@ import org.gradle.api.internal.artifacts.mvnsettings.LocalMavenRepositoryLocator
 import org.gradle.api.internal.artifacts.repositories.transport.RepositoryTransportFactory;
 import org.gradle.api.publish.maven.MavenPublication;
 import org.gradle.api.publish.maven.internal.publication.MavenPublicationInternal;
-import org.gradle.api.publish.maven.internal.publisher.DuplicatePublicationTracker;
+import org.gradle.api.publish.internal.validation.DuplicatePublicationTracker;
 import org.gradle.api.tasks.Internal;
 import org.gradle.api.tasks.PathSensitivity;
 import org.gradle.internal.Factory;
