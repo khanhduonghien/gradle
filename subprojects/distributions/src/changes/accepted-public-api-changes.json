@@ -1,14 +1,14 @@
 {
     "acceptedApiChanges": [
         {
-            "type": "org.gradle.api.publish.maven.tasks.PublishToMavenLocal",
-            "member": "Method org.gradle.api.publish.maven.tasks.PublishToMavenLocal.getRepositoryTransportFactory()",
+            "type": "org.gradle.api.publish.maven.tasks.AbstractPublishToMaven",
+            "member": "Method org.gradle.api.publish.maven.tasks.AbstractPublishToMaven.getRepositoryTransportFactory()",
             "acceptation": "Injected service",
             "changes": []
         },
         {
-            "type": "org.gradle.api.publish.maven.tasks.PublishToMavenRepository",
-            "member": "Method org.gradle.api.publish.maven.tasks.PublishToMavenRepository.getDuplicatePublicationTracker()",
+            "type": "org.gradle.api.publish.maven.tasks.AbstractPublishToMaven",
+            "member": "Method org.gradle.api.publish.maven.tasks.AbstractPublishToMaven.getDuplicatePublicationTracker()",
             "acceptation": "Injected service",
             "changes": []
         }

@@ -17,7 +17,6 @@
 package org.gradle.api.publish.maven.tasks;
 
 import org.gradle.api.InvalidUserDataException;
-import org.gradle.api.internal.artifacts.repositories.transport.RepositoryTransportFactory;
 import org.gradle.api.publish.internal.PublishOperation;
 import org.gradle.api.publish.maven.internal.publication.MavenPublicationInternal;
 import org.gradle.api.publish.maven.internal.publisher.MavenLocalPublisher;
@@ -25,7 +24,7 @@ import org.gradle.api.publish.maven.internal.publisher.MavenPublisher;
 import org.gradle.api.publish.maven.internal.publisher.ValidatingMavenPublisher;
 import org.gradle.api.tasks.TaskAction;
 
-import javax.inject.Inject;
+import java.net.URI;
 
 /**
  * Publishes a {@link org.gradle.api.publish.maven.MavenPublication} to the Maven Local repository.
@@ -41,6 +40,8 @@ public class PublishToMavenLocal extends AbstractPublishToMaven {
             throw new InvalidUserDataException("The 'publication' property is required");
         }
 
+        getDuplicatePublicationTracker().checkCanPublish(publication, localMavenRepo(), "mavenLocal");
+
         new PublishOperation(publication, "mavenLocal") {
             @Override
             protected void publish() throws Exception {
@@ -51,8 +52,7 @@ public class PublishToMavenLocal extends AbstractPublishToMaven {
         }.run();
     }
 
-    @Inject
-    protected RepositoryTransportFactory getRepositoryTransportFactory() {
-        throw new UnsupportedOperationException();
+    private URI localMavenRepo() {
+        return getMavenRepositoryLocator().getLocalMavenRepository().toURI();
     }
 }
