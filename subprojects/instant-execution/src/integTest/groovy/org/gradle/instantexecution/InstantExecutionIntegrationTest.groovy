@@ -16,20 +16,23 @@
 
 package org.gradle.instantexecution
 
+import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.initialization.Settings
+import org.gradle.api.invocation.Gradle
+import org.gradle.api.model.ObjectFactory
 import org.gradle.initialization.LoadProjectsBuildOperationType
-import org.gradle.integtests.fixtures.AbstractIntegrationSpec
 import org.gradle.integtests.fixtures.BuildOperationsFixture
-import org.gradle.test.fixtures.archive.ZipTestFixture
 import org.gradle.test.fixtures.file.TestFile
 import org.gradle.test.fixtures.server.http.BlockingHttpServer
 import org.junit.Rule
+import org.slf4j.Logger
 import spock.lang.Ignore
+import spock.lang.Unroll
 
-class InstantExecutionIntegrationTest extends AbstractIntegrationSpec {
+import javax.inject.Inject
 
-    def setup() {
-        executer.noDeprecationChecks()
-    }
+class InstantExecutionIntegrationTest extends AbstractInstantExecutionIntegrationTest {
 
     def "instant execution for help on empty project"() {
         given:
@@ -104,70 +107,6 @@ class InstantExecutionIntegrationTest extends AbstractIntegrationSpec {
         result.assertTasksExecuted(":a")
     }
 
-    def "instant execution for compileJava on Java project with no dependencies"() {
-        given:
-        buildFile << """
-            plugins { id 'java' }
-            
-            println "running build script"
-        """
-        file("src/main/java/Thing.java") << """
-            class Thing {
-            }
-        """
-
-        expect:
-        instantRun "compileJava"
-        outputContains("running build script")
-        result.assertTasksExecuted(":compileJava")
-        def classFile = file("build/classes/java/main/Thing.class")
-        classFile.isFile()
-
-        when:
-        classFile.delete()
-        instantRun "compileJava"
-
-        then:
-        outputDoesNotContain("running build script")
-        result.assertTasksExecuted(":compileJava")
-        classFile.isFile()
-    }
-
-    def "instant execution for assemble on Java project with multiple source directories"() {
-        given:
-        buildFile << """
-            plugins { id 'java' }
-            
-            sourceSets.main.java.srcDir("src/common/java") 
-            
-            println "running build script"
-        """
-        file("src/common/java/OtherThing.java") << """
-            class OtherThing {
-            }
-        """
-        file("src/main/java/Thing.java") << """
-            class Thing extends OtherThing {
-            }
-        """
-
-        expect:
-        instantRun "assemble"
-        outputContains("running build script")
-        result.assertTasksExecuted(":compileJava", ":processResources", ":classes", ":jar", ":assemble")
-        def classFile = file("build/classes/java/main/Thing.class")
-        classFile.isFile()
-
-        when:
-        classFile.delete()
-        instantRun "assemble"
-
-        then:
-        outputDoesNotContain("running build script")
-        result.assertTasksExecuted(":compileJava", ":processResources", ":classes", ":jar", ":assemble")
-        classFile.isFile()
-    }
-
     @Rule
     BlockingHttpServer server = new BlockingHttpServer()
 
@@ -231,34 +170,286 @@ class InstantExecutionIntegrationTest extends AbstractIntegrationSpec {
         result.groupedOutput.task(":a:c:help").output == firstRunOutput.task(":a:c:help").output
     }
 
-    @Ignore
-    def "instant execution for compileGroovy on Groovy project with no dependencies"() {
-        given:
+    def "restores task fields whose value is an object graph with cycles"() {
         buildFile << """
-            plugins { id 'groovy' }
-            
-            println "running build script"
-        """
-        file("src/main/java/Thing.groovy") << """
-            class Thing {
+            class SomeBean {
+                String value 
+                SomeBean parent
+                SomeBean child
+                
+                SomeBean(String value) {
+                    println("creating bean")
+                    this.value = value
+                }
+            }
+
+            class SomeTask extends DefaultTask {
+                final SomeBean bean
+                
+                SomeTask() {
+                    bean = new SomeBean("default")
+                    bean.parent = new SomeBean("parent")
+                    bean.parent.child = bean
+                    bean.parent.parent = bean.parent
+                }
+
+                @TaskAction
+                void run() {
+                    println "bean.value = " + bean.value
+                    println "bean.parent.value = " + bean.parent.value
+                    println "same reference = " + (bean.parent.child == bean)
+                }
+            }
+
+            task ok(type: SomeTask) {
+                bean.value = "child"
             }
         """
 
-        expect:
-        instantRun "compileGroovy"
-        outputContains("running build script")
-        result.assertTasksExecuted(":compileGroovy")
-        def classFile = file("build/classes/java/main/Thing.class")
-        classFile.isFile()
-
         when:
-        classFile.delete()
-        instantRun "compileGroovy"
+        instantRun "ok"
 
         then:
-        outputDoesNotContain("running build script")
-        result.assertTasksExecuted(":compileGroovy")
-        classFile.isFile()
+        result.output.count("creating bean") == 2
+
+        when:
+        instantRun "ok"
+
+        then:
+        result.output.count("creating bean") == 2 // still running the task constructor, which creates values which are then discarded
+        outputContains("bean.value = child")
+        outputContains("bean.parent.value = parent")
+        outputContains("same reference = true")
+    }
+
+    @Unroll
+    def "restores task fields whose value is instance of #type"() {
+        buildFile << """
+            class SomeBean {
+                ${type} value 
+            }
+
+            class SomeTask extends DefaultTask {
+                private final SomeBean bean = new SomeBean()
+                private final ${type} value
+                
+                SomeTask() {
+                    value = ${reference}
+                    bean.value = ${reference}
+                }
+
+                @TaskAction
+                void run() {
+                    println "value = " + value
+                    println "bean.value = " + bean.value
+                }
+            }
+
+            task ok(type: SomeTask)
+        """
+
+        when:
+        instantRun "ok"
+        instantRun "ok"
+
+        then:
+        outputContains("value = ${output}")
+        outputContains("bean.value = ${output}")
+
+        where:
+        type                   | reference                | output
+        String.name            | "'value'"                | "value"
+        String.name            | "null"                   | "null"
+        Boolean.name           | "true"                   | "true"
+        boolean.name           | "true"                   | "true"
+        Byte.name              | "12"                     | "12"
+        byte.name              | "12"                     | "12"
+        Integer.name           | "12"                     | "12"
+        int.name               | "12"                     | "12"
+        Long.name              | "12"                     | "12"
+        long.name              | "12"                     | "12"
+        Double.name            | "12.1"                   | "12.1"
+        double.name            | "12.1"                   | "12.1"
+        Class.name             | "SomeBean"               | "class SomeBean"
+        "List<String>"         | "['a', 'b', 'c']"        | "[a, b, c]"
+        "Set<String>"          | "['a', 'b', 'c'] as Set" | "[a, b, c]"
+        "Map<String, Integer>" | "[a: 1, b: 2]"           | "[a:1, b:2]"
+    }
+
+    @Unroll
+    def "restores task fields whose value is service of type #type"() {
+        buildFile << """
+            class SomeBean {
+                ${type} value 
+            }
+
+            class SomeTask extends DefaultTask {
+                final SomeBean bean = new SomeBean()
+                ${type} value
+
+                @TaskAction
+                void run() {
+                    value.${invocation}
+                    bean.value.${invocation}
+                }
+            }
+
+            task ok(type: SomeTask) {
+                value = ${reference}
+                bean.value = ${reference}
+            }
+        """
+
+        when:
+        instantRun "ok"
+        instantRun "ok"
+
+        then:
+        noExceptionThrown()
+
+        where:
+        type               | reference | invocation
+        Logger.name        | "logger"  | "info('hi')"
+        ObjectFactory.name | "objects" | "newInstance(SomeBean)"
+    }
+
+    @Unroll
+    def "restores task fields whose value is provider of type #type"() {
+        buildFile << """
+            import ${Inject.name}
+
+            class SomeBean {
+                ${type} value
+            }
+
+            class SomeTask extends DefaultTask {
+                final SomeBean bean = project.objects.newInstance(SomeBean)
+                ${type} value
+
+                @TaskAction
+                void run() {
+                    println "value = " + value.getOrNull()
+                    println "bean.value = " + bean.value.getOrNull()
+                }
+            }
+
+            task ok(type: SomeTask) {
+                value = ${reference}
+                bean.value = ${reference}
+            }
+        """
+
+        when:
+        instantRun "ok"
+        instantRun "ok"
+
+        then:
+        outputContains("value = ${output}")
+        outputContains("bean.value = ${output}")
+
+        where:
+        type               | reference                                 | output
+        "Provider<String>" | "providers.provider { 'value' }"          | "value"
+        "Provider<String>" | "providers.provider { null }"             | "null"
+        "Provider<String>" | "objects.property(String).value('value')" | "value"
+        "Provider<String>" | "objects.property(String)"                | "null"
+    }
+
+    @Unroll
+    def "restores task fields whose value is property of type #type"() {
+        buildFile << """
+            import ${Inject.name}
+
+            class SomeBean {
+                final ${type} value
+
+                @Inject
+                SomeBean(ObjectFactory objects) {
+                    value = ${factory}
+                }
+            }
+
+            class SomeTask extends DefaultTask {
+                final SomeBean bean = project.objects.newInstance(SomeBean)
+                final ${type} value
+
+                @Inject
+                SomeTask(ObjectFactory objects) {
+                    value = ${factory}
+                }
+
+                @TaskAction
+                void run() {
+                    println "value = " + value.getOrNull()
+                    println "bean.value = " + bean.value.getOrNull()
+                }
+            }
+
+            task ok(type: SomeTask) {
+                value = ${reference}
+                bean.value = ${reference}
+            }
+        """
+
+        when:
+        instantRun "ok"
+        instantRun "ok"
+
+        then:
+        def expected = output instanceof File ? file(output.path) : output
+        outputContains("value = ${expected}")
+        outputContains("bean.value = ${expected}")
+
+        where:
+        type                  | factory                       | reference     | output
+        "Property<String>"    | "objects.property(String)"    | "'value'"     | "value"
+        "Property<String>"    | "objects.property(String)"    | "null"        | "null"
+        "DirectoryProperty"   | "objects.directoryProperty()" | "file('abc')" | new File('abc')
+        "DirectoryProperty"   | "objects.directoryProperty()" | "null"        | "null"
+        "RegularFileProperty" | "objects.fileProperty()"      | "file('abc')" | new File('abc')
+        "RegularFileProperty" | "objects.fileProperty()"      | "null"        | "null"
+    }
+
+    @Unroll
+    def "warns when task field references an object of type #type"() {
+        buildFile << """
+            class SomeBean {
+                private ${type} badReference
+            }
+            
+            class SomeTask extends DefaultTask {
+                private final ${type} badReference
+                private final bean = new SomeBean()
+                
+                SomeTask() {
+                    badReference = ${reference}
+                    bean.badReference = ${reference}
+                }
+
+                @TaskAction
+                void run() {
+                    println "reference = " + badReference
+                    println "bean.reference = " + bean.badReference
+                }
+            }
+
+            task broken(type: SomeTask)
+        """
+
+        when:
+        instantRun "broken"
+
+        then:
+        outputContains("instant-execution > Cannot serialize object of type ${type} as these are not supported with instant execution.")
+        outputContains("instant-execution > task ':broken' field 'SomeTask.badReference' cannot be serialized because there's no serializer for")
+        outputContains("instant-execution > task ':broken' field 'SomeBean.badReference' cannot be serialized because there's no serializer for")
+
+        where:
+        type          | reference
+        Project.name  | "project"
+        Gradle.name   | "project.gradle"
+        Settings.name | "project.gradle.settings"
+        Task.name     | "this"
     }
 
     @Ignore
@@ -271,44 +462,4 @@ class InstantExecutionIntegrationTest extends AbstractIntegrationSpec {
         instantRun 'mainApkListPersistenceDebug', 'compileDebugAidl'
         instantRun 'mainApkListPersistenceDebug', 'compileDebugAidl'
     }
-
-    def "multi-project java build"() {
-        given:
-        settingsFile << """
-            include("a", "b")
-        """
-        buildFile << """
-            allprojects { apply plugin: 'java' }
-            project(":b") {
-                dependencies {
-                    implementation(project(":a"))
-                }
-            }
-        """
-        file("a/src/main/java/a/A.java") << """
-            package a;
-            public class A {}
-        """
-        file("b/src/main/java/b/B.java") << """
-            package b;
-            public class B extends a.A {}
-        """
-
-        when:
-        instantRun ":b:assemble", "-s"
-
-        and:
-        file("b/build/classes/java/main/b/B.class").delete()
-        instantRun ":b:assemble", "-s"
-
-        then:
-        new ZipTestFixture(file("b/build/libs/b.jar")).assertContainsFile("b/B.class")
-    }
-
-    private void instantRun(String... args) {
-        run(INSTANT_EXECUTION_PROPERTY, *args)
-    }
-
-    private static final String INSTANT_EXECUTION_PROPERTY = "-Dorg.gradle.unsafe.instant-execution"
-
 }
